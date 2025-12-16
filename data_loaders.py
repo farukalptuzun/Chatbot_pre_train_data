@@ -8,7 +8,7 @@ from typing import Iterator, Dict
 from datasets import load_dataset
 
 
-def _check_file_exists(file_path: str, min_examples: int = None) -> bool:
+def _check_file_exists(file_path: str, min_examples: int = None) -> tuple[bool, int]:
     """
     Check if file exists and has at least min_examples lines
     
@@ -17,21 +17,24 @@ def _check_file_exists(file_path: str, min_examples: int = None) -> bool:
         min_examples: Minimum number of examples required (None = any count is OK)
         
     Returns:
-        True if file exists and has enough examples
+        Tuple of (exists_and_sufficient, count)
+        - exists_and_sufficient: True if file exists and has enough examples
+        - count: Number of examples in file (0 if file doesn't exist)
     """
     if not os.path.exists(file_path):
-        return False
-    
-    if min_examples is None:
-        return True  # File exists, no minimum requirement
+        return False, 0
     
     # Count lines in file
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             count = sum(1 for line in f if line.strip())
-        return count >= min_examples
+        
+        if min_examples is None:
+            return True, count  # File exists, no minimum requirement
+        
+        return count >= min_examples, count
     except Exception:
-        return False
+        return False, 0
 
 
 def load_oscar_tr(output_file: str = "oscar_tr_raw.jsonl", max_examples: int = None) -> str:
@@ -47,12 +50,16 @@ def load_oscar_tr(output_file: str = "oscar_tr_raw.jsonl", max_examples: int = N
         Path to the normalized file
     """
     # Check if file already exists and has enough examples
-    if _check_file_exists(output_file, max_examples):
+    exists, count = _check_file_exists(output_file, max_examples)
+    if exists:
         print(f"mC4-TR: File already exists with sufficient examples: {output_file}")
-        # Count examples for reporting
-        with open(output_file, "r", encoding="utf-8") as f:
-            existing_count = sum(1 for line in f if line.strip())
-        print(f"  Existing examples: {existing_count:,}")
+        print(f"  Existing examples: {count:,}")
+        return output_file
+    
+    # If file exists but insufficient, warn user and use existing
+    if os.path.exists(output_file):
+        print(f"mC4-TR: File exists with {count:,} examples but {max_examples:,} needed.")
+        print(f"  Using existing file. Consider deleting {output_file} to re-download.")
         return output_file
     
     limit_str = f" (max: {max_examples:,} examples)" if max_examples else ""
@@ -88,11 +95,16 @@ def load_wikipedia_tr(output_file: str = "wiki_tr_raw.jsonl", max_examples: int 
         Path to the normalized file
     """
     # Check if file already exists and has enough examples
-    if _check_file_exists(output_file, max_examples):
+    exists, count = _check_file_exists(output_file, max_examples)
+    if exists:
         print(f"Wiki-TR: File already exists with sufficient examples: {output_file}")
-        with open(output_file, "r", encoding="utf-8") as f:
-            existing_count = sum(1 for line in f if line.strip())
-        print(f"  Existing examples: {existing_count:,}")
+        print(f"  Existing examples: {count:,}")
+        return output_file
+    
+    # If file exists but insufficient, warn user and use existing
+    if os.path.exists(output_file):
+        print(f"Wiki-TR: File exists with {count:,} examples but {max_examples:,} needed.")
+        print(f"  Using existing file. Consider deleting {output_file} to re-download.")
         return output_file
     
     limit_str = f" (max: {max_examples:,} examples)" if max_examples else ""
@@ -129,11 +141,16 @@ def load_wikipedia_en(output_file: str = "wiki_en_raw.jsonl", max_examples: int 
         Path to the normalized file
     """
     # Check if file already exists and has enough examples
-    if _check_file_exists(output_file, max_examples):
+    exists, count = _check_file_exists(output_file, max_examples)
+    if exists:
         print(f"Wiki-EN: File already exists with sufficient examples: {output_file}")
-        with open(output_file, "r", encoding="utf-8") as f:
-            existing_count = sum(1 for line in f if line.strip())
-        print(f"  Existing examples: {existing_count:,}")
+        print(f"  Existing examples: {count:,}")
+        return output_file
+    
+    # If file exists but insufficient, warn user and use existing
+    if os.path.exists(output_file):
+        print(f"Wiki-EN: File exists with {count:,} examples but {max_examples:,} needed.")
+        print(f"  Using existing file. Consider deleting {output_file} to re-download.")
         return output_file
     
     limit_str = f" (max: {max_examples:,} examples)" if max_examples else ""
@@ -175,11 +192,16 @@ def load_common_crawl(output_file: str = "cc_raw.jsonl", language: str = "en", m
         max_examples = 1_000_000  # Default 1M for safety
     
     # Check if file already exists and has enough examples
-    if _check_file_exists(output_file, max_examples):
+    exists, count = _check_file_exists(output_file, max_examples)
+    if exists:
         print(f"Common Crawl ({language}): File already exists with sufficient examples: {output_file}")
-        with open(output_file, "r", encoding="utf-8") as f:
-            existing_count = sum(1 for line in f if line.strip())
-        print(f"  Existing examples: {existing_count:,}")
+        print(f"  Existing examples: {count:,}")
+        return output_file
+    
+    # If file exists but insufficient, warn user and use existing
+    if os.path.exists(output_file):
+        print(f"Common Crawl ({language}): File exists with {count:,} examples but {max_examples:,} needed.")
+        print(f"  Using existing file. Consider deleting {output_file} to re-download.")
         return output_file
     
     limit_str = f" (max: {max_examples:,} examples)"

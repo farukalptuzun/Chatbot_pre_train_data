@@ -214,7 +214,8 @@ def mix_datasets(cleaned_datasets: dict, output_file: str):
 def process_and_mix_files(
     input_files_with_sources: List[Tuple[str, str]],
     output_file: str,
-    reset_dedup_between: bool = False
+    reset_dedup_between: bool = False,
+    progress_interval: int = 10000
 ):
     """
     Process files through pipeline and mix according to target ratios
@@ -223,6 +224,7 @@ def process_and_mix_files(
         input_files_with_sources: List of (source_name, file_path) tuples
         output_file: Output file path
         reset_dedup_between: Whether to reset dedup between files
+        progress_interval: Print progress every N examples
         
     Returns:
         Dict with statistics about the mixing process
@@ -269,6 +271,10 @@ def process_and_mix_files(
                     if processed is not None:
                         cleaned_by_source[source].append(processed)
                         passed += 1
+                    
+                    # Progress reporting
+                    if total % progress_interval == 0:
+                        print(f"  Progress: {total:,} processed | {passed:,} passed | Rate: {passed/total*100:.1f}%")
                 
                 except (json.JSONDecodeError, Exception) as e:
                     continue
