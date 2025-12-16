@@ -4,10 +4,11 @@ Combines all processing steps into a single pipeline
 """
 import json
 import os
-from typing import Iterator, Dict, Optional
+import random
+from typing import Iterator, Dict, Optional, List, Tuple
 from pathlib import Path
 
-from config import config
+from config import config, DATASET_MIX, TOTAL_TARGET_EXAMPLES, OVERFETCH_FACTOR
 from basic_cleaner import clean_and_filter
 from language_filter import language_filter
 from deduplication import get_deduplicator, reset_deduplicator
@@ -122,6 +123,168 @@ def process_jsonl_file(
     print(f"  Output saved to: {output_file}")
 
 
+# ============================================================================
+# DATASET MIXING FUNCTIONS (Ratio-aware mixing after cleaning/dedup)
+# ============================================================================
+
+def compute_target_counts():
+    """
+    Calculate target counts for each dataset based on ratios
+    
+    Returns:
+        Dict mapping source names to target example counts
+    """
+    return {
+        k: int(v["target"] * TOTAL_TARGET_EXAMPLES)
+        for k, v in DATASET_MIX.items()
+    }
+
+
+def compute_fetch_counts():
+    """
+    Calculate how much to fetch initially (overfetch to compensate for dedup/filter losses)
+    
+    Returns:
+        Dict mapping source names to fetch counts (with overfetch factor)
+    """
+    targets = compute_target_counts()
+    return {
+        k: int(count * OVERFETCH_FACTOR)
+        for k, count in targets.items()
+    }
+
+
+def mix_datasets(cleaned_datasets: dict, output_file: str):
+    """
+    Mix datasets according to target ratios after cleaning/dedup
+    
+    Args:
+        cleaned_datasets: Dict of {source_name: [text1, text2, ...]}
+        output_file: Output file path
+        
+    Returns:
+        Dict with statistics about the mixing process
+    """
+    targets = compute_target_counts()
+    
+    print(f"\n{'='*60}")
+    print(f"Mixing datasets to target ratios...")
+    print(f"{'='*60}")
+    
+    # Statistics
+    stats = {}
+    total_written = 0
+    
+    with open(output_file, "w", encoding="utf-8") as out_f:
+        for source, texts in cleaned_datasets.items():
+            target_count = targets.get(source, 0)
+            
+            # Shuffle for randomness
+            random.shuffle(texts)
+            
+            # Take up to target count
+            keep_n = min(len(texts), target_count)
+            selected_texts = texts[:keep_n]
+            
+            # Write to output
+            for text in selected_texts:
+                out_f.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
+                total_written += 1
+            
+            stats[source] = {
+                "available": len(texts),
+                "target": target_count,
+                "selected": keep_n,
+                "ratio": keep_n / total_written if total_written > 0 else 0
+            }
+            
+            print(f"  {source:12s}: {keep_n:>8,}/{target_count:>8,} target ({keep_n/target_count*100:.1f}% of target)")
+    
+    # Print final ratio report
+    print(f"\nFinal Mix Ratios:")
+    for source, stat in stats.items():
+        actual_ratio = stat["selected"] / total_written if total_written > 0 else 0
+        target_ratio = DATASET_MIX[source]["target"]
+        print(f"  {source:12s}: {actual_ratio*100:>5.2f}% (target: {target_ratio*100:>5.2f}%)")
+    
+    print(f"\nTotal examples in final dataset: {total_written:,}")
+    return stats
+
+
+def process_and_mix_files(
+    input_files_with_sources: List[Tuple[str, str]],
+    output_file: str,
+    reset_dedup_between: bool = False
+):
+    """
+    Process files through pipeline and mix according to target ratios
+    
+    Args:
+        input_files_with_sources: List of (source_name, file_path) tuples
+        output_file: Output file path
+        reset_dedup_between: Whether to reset dedup between files
+        
+    Returns:
+        Dict with statistics about the mixing process
+    """
+    # Step 1: Process all files through cleaning pipeline
+    print(f"\n{'='*60}")
+    print(f"Step 1: Processing files through cleaning pipeline...")
+    print(f"{'='*60}")
+    
+    if not reset_dedup_between:
+        reset_deduplicator()
+    
+    # Store cleaned texts by source
+    cleaned_by_source = {source: [] for source, _ in input_files_with_sources}
+    
+    for source, input_file in input_files_with_sources:
+        print(f"\nProcessing: {source} ({input_file})")
+        
+        if reset_dedup_between:
+            reset_deduplicator()
+        
+        deduplicator = get_deduplicator()
+        total = 0
+        passed = 0
+        
+        with open(input_file, "r", encoding="utf-8") as in_f:
+            for line in in_f:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                try:
+                    data = json.loads(line)
+                    text = data.get("text", "")
+                    
+                    if not text:
+                        continue
+                    
+                    total += 1
+                    
+                    # Process through pipeline
+                    processed = process_text(text, deduplicator)
+                    
+                    if processed is not None:
+                        cleaned_by_source[source].append(processed)
+                        passed += 1
+                
+                except (json.JSONDecodeError, Exception) as e:
+                    continue
+        
+        print(f"  {source}: {passed:,}/{total:,} passed ({passed/total*100:.1f}%)")
+    
+    # Step 2: Mix according to target ratios
+    print(f"\n{'='*60}")
+    print(f"Step 2: Mixing datasets to target ratios...")
+    print(f"{'='*60}")
+    
+    stats = mix_datasets(cleaned_by_source, output_file)
+    
+    return stats
+
+
 def process_multiple_files(
     input_files: list,
     output_file: str,
@@ -204,10 +367,11 @@ def run_full_pipeline(
     output_file: str = None
 ):
     """
-    Run the full pipeline from data loading to final output
+    Run the full pipeline from data loading to final output with ratio-aware mixing
     
     Args:
         data_sources: Dict with source names and their file paths or loader functions
+                     Keys should match DATASET_MIX keys: "mc4_tr", "wiki_tr", "wiki_en", "c4_en", "tech_docs"
         output_file: Output file path (default: config.train_output_file)
     """
     from data_loaders import (
@@ -216,49 +380,84 @@ def run_full_pipeline(
     
     output_file = output_file or os.path.join(config.output_dir, config.train_output_file)
     
-    # Step 1: Load and normalize data sources
-    normalized_files = []
+    # Calculate how much to fetch (with overfetch to compensate for dedup/filter losses)
+    fetch_counts = compute_fetch_counts()
     
-    if "oscar_tr" in data_sources:
-        file_path = data_sources["oscar_tr"]
-        if callable(file_path):
-            normalized_files.append(file_path())
+    print(f"\n{'='*60}")
+    print(f"Dataset Loading Plan (with {OVERFETCH_FACTOR}x overfetch):")
+    print(f"{'='*60}")
+    for source, count in fetch_counts.items():
+        target = int(DATASET_MIX[source]["target"] * TOTAL_TARGET_EXAMPLES)
+        print(f"  {source:12s}: {count:>10,} examples (target: {target:,})")
+    print()
+    
+    # Step 1: Load datasets with calculated limits
+    loaded_files_with_sources = []
+    
+    # Map source keys (support both old and new naming)
+    # None = use default loader, file path = use existing file, callable = call it
+    if "oscar_tr" in data_sources or "mc4_tr" in data_sources:
+        source_name = "mc4_tr"
+        file_source = data_sources.get("oscar_tr") or data_sources.get("mc4_tr")
+        max_examples = fetch_counts.get(source_name)
+        if file_source is None:
+            # Use default loader
+            file_path = load_oscar_tr("raw_data/mc4_tr_raw.jsonl", max_examples=max_examples)
+        elif callable(file_source):
+            # Call provided function
+            file_path = file_source()
         else:
-            normalized_files.append(file_path)
+            # Use provided file path
+            file_path = file_source
+        loaded_files_with_sources.append((source_name, file_path))
     
     if "wiki_tr" in data_sources:
-        file_path = data_sources["wiki_tr"]
-        if callable(file_path):
-            normalized_files.append(file_path())
+        source_name = "wiki_tr"
+        file_source = data_sources["wiki_tr"]
+        max_examples = fetch_counts.get(source_name)
+        if file_source is None:
+            file_path = load_wikipedia_tr("raw_data/wiki_tr_raw.jsonl", max_examples=max_examples)
+        elif callable(file_source):
+            file_path = file_source()
         else:
-            normalized_files.append(file_path)
+            file_path = file_source
+        loaded_files_with_sources.append((source_name, file_path))
     
     if "wiki_en" in data_sources:
-        file_path = data_sources["wiki_en"]
-        if callable(file_path):
-            normalized_files.append(file_path())
+        source_name = "wiki_en"
+        file_source = data_sources["wiki_en"]
+        max_examples = fetch_counts.get(source_name)
+        if file_source is None:
+            file_path = load_wikipedia_en("raw_data/wiki_en_raw.jsonl", max_examples=max_examples)
+        elif callable(file_source):
+            file_path = file_source()
         else:
-            normalized_files.append(file_path)
+            file_path = file_source
+        loaded_files_with_sources.append((source_name, file_path))
     
-    if "common_crawl" in data_sources:
-        file_path = data_sources["common_crawl"]
-        if callable(file_path):
-            normalized_files.append(file_path())
+    if "common_crawl" in data_sources or "c4_en" in data_sources:
+        source_name = "c4_en"
+        file_source = data_sources.get("common_crawl") or data_sources.get("c4_en")
+        max_examples = fetch_counts.get(source_name)
+        if file_source is None:
+            file_path = load_common_crawl("raw_data/c4_en_raw.jsonl", language="en", max_examples=max_examples)
+        elif callable(file_source):
+            file_path = file_source()
         else:
-            normalized_files.append(file_path)
+            file_path = file_source
+        loaded_files_with_sources.append((source_name, file_path))
     
     if "tech_docs" in data_sources:
-        normalized_files.append(data_sources["tech_docs"])
+        source_name = "tech_docs"
+        file_path = data_sources["tech_docs"]
+        loaded_files_with_sources.append((source_name, file_path))
     
-    if "curated" in data_sources:
-        normalized_files.append(data_sources["curated"])
-    
-    # Step 2: Process all files through pipeline
+    # Step 2: Process and mix according to target ratios
     print(f"\n{'='*60}")
-    print(f"Starting pipeline processing...")
+    print(f"Starting ratio-aware pipeline processing...")
     print(f"{'='*60}\n")
     
-    process_multiple_files(normalized_files, output_file, reset_dedup_between=False)
+    stats = process_and_mix_files(loaded_files_with_sources, output_file, reset_dedup_between=False)
     
     print(f"\n{'='*60}")
     print(f"Pipeline completed!")

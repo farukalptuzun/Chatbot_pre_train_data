@@ -12,32 +12,35 @@ from pipeline import run_full_pipeline
 
 
 def main():
-    """Example: Run full pipeline with different data sources"""
+    """
+    Example: Run full pipeline with ratio-aware mixing
     
-    # Option 1: Load data from HuggingFace datasets
-    print("Loading data sources...")
+    The pipeline will:
+    1. Calculate fetch counts based on DATASET_MIX ratios (with overfetch)
+    2. Load datasets with calculated limits
+    3. Process through cleaning/dedup/filters
+    4. Mix final output to match target ratios
+    """
+    from config import DATASET_MIX, TOTAL_TARGET_EXAMPLES
     
-    # Load Turkish sources
-    oscar_tr_file = load_oscar_tr("raw_data/oscar_tr_raw.jsonl")
-    wiki_tr_file = load_wikipedia_tr("raw_data/wiki_tr_raw.jsonl")
-    
-    # Load English sources
-    wiki_en_file = load_wikipedia_en("raw_data/wiki_en_raw.jsonl")
-    cc_en_file = load_common_crawl("raw_data/cc_en_raw.jsonl", language="en")
+    print(f"Target dataset size: {TOTAL_TARGET_EXAMPLES:,} examples")
+    print(f"Dataset mix ratios:")
+    for source, ratios in DATASET_MIX.items():
+        print(f"  {source:12s}: {ratios['target']*100:>5.2f}%")
+    print()
     
     # Prepare data sources dictionary
-    # You can either provide file paths (if already loaded) or loader functions
+    # Pass None to use default loader with calculated limits, or pass file path if already loaded
     data_sources = {
-        "oscar_tr": oscar_tr_file,
-        "wiki_tr": wiki_tr_file,
-        "wiki_en": wiki_en_file,
-        "common_crawl": cc_en_file,
-        # Add your custom data sources here:
+        "mc4_tr": None,  # None = use default loader with calculated max_examples
+        "wiki_tr": None,  # Pipeline will call load_wikipedia_tr with calculated limit
+        "wiki_en": None,
+        "c4_en": None,
+        # Or pass file paths if data is already loaded:
         # "tech_docs": "path/to/tech_docs.jsonl",
-        # "curated": "path/to/curated.jsonl",
     }
     
-    # Run full pipeline
+    # Run full pipeline (will handle loading with limits and ratio-aware mixing)
     run_full_pipeline(
         data_sources=data_sources,
         output_file="output/train.jsonl"

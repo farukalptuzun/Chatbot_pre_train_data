@@ -59,3 +59,43 @@ class Config:
 # Global config instance
 config = Config()
 
+# ============================================================================
+# DATASET MIX CONFIGURATION (SINGLE SOURCE OF TRUTH)
+# ============================================================================
+
+# Dataset mix ratios (target percentages for final output)
+DATASET_MIX = {
+    "mc4_tr": {
+        "target": 0.30,      # %30
+        "min": 0.25,
+        "max": 0.35,
+    },
+    "wiki_tr": {
+        "target": 0.125,     # %12.5
+        "min": 0.10,
+        "max": 0.15,
+    },
+    "wiki_en": {
+        "target": 0.225,     # %22.5
+        "min": 0.20,
+        "max": 0.25,
+    },
+    "tech_docs": {
+        "target": 0.175,     # %17.5
+        "min": 0.15,
+        "max": 0.20,
+    },
+    "c4_en": {
+        "target": 0.075,     # %7.5
+        "min": 0.05,
+        "max": 0.10,
+    },
+}
+
+# Total target examples (adjustable)
+TOTAL_TARGET_EXAMPLES = 10_000_000  # 10M examples
+
+# Overfetch factor (to compensate for dedup/filter losses)
+# Fetch 1.5x target to account for filtering and deduplication losses
+OVERFETCH_FACTOR = 1.5
+
