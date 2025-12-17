@@ -7,8 +7,15 @@ import os
 import random
 from typing import Iterator, Dict, Optional, List, Tuple
 from pathlib import Path
+import multiprocessing as mp
 
-from config import config, DATASET_MIX, TOTAL_TARGET_EXAMPLES, OVERFETCH_FACTOR
+from config import (
+    config,
+    DATASET_MIX,
+    TOTAL_TARGET_EXAMPLES,
+    OVERFETCH_FACTOR,
+    LANGUAGE_FILTER_BY_SOURCE,
+)
 from basic_cleaner import clean_and_filter
 from language_filter import language_filter
 from deduplication import get_deduplicator, reset_deduplicator
@@ -16,7 +23,12 @@ from pii_filter import pii_filter
 from quality_filter import quality_filter
 
 
-def process_text(text: str, deduplicator=None) -> Optional[str]:
+def process_text(
+    text: str,
+    deduplicator=None,
+    language_filter_enabled: bool = True,
+    dedup_enabled: bool = True,
+) -> Optional[str]:
     """
     Process a single text through the entire pipeline
     
@@ -33,15 +45,17 @@ def process_text(text: str, deduplicator=None) -> Optional[str]:
         return None
     
     # Step 2: Language filter
-    if not language_filter(cleaned):
-        return None
+    if language_filter_enabled:
+        if not language_filter(cleaned):
+            return None
     
     # Step 3: Deduplication
-    if deduplicator is None:
-        deduplicator = get_deduplicator()
-    
-    if deduplicator.is_duplicate(cleaned):
-        return None
+    if dedup_enabled:
+        if deduplicator is None:
+            deduplicator = get_deduplicator()
+        
+        if deduplicator.is_duplicate(cleaned):
+            return None
     
     # Step 4: PII filter
     if not pii_filter(cleaned):
@@ -58,7 +72,9 @@ def process_jsonl_file(
     input_file: str,
     output_file: str,
     reset_dedup: bool = True,
-    progress_interval: int = 10000
+    progress_interval: int = 10000,
+    language_filter_enabled: bool = True,
+    dedup_enabled: bool = True,
 ):
     """
     Process a JSONL file through the entire pipeline
@@ -98,7 +114,12 @@ def process_jsonl_file(
                 total += 1
                 
                 # Process through pipeline
-                processed = process_text(text, deduplicator)
+                processed = process_text(
+                    text,
+                    deduplicator,
+                    language_filter_enabled=language_filter_enabled,
+                    dedup_enabled=dedup_enabled,
+                )
                 
                 if processed is not None:
                     # Write to output
@@ -247,6 +268,7 @@ def process_and_mix_files(
             reset_deduplicator()
         
         deduplicator = get_deduplicator()
+        lang_enabled = LANGUAGE_FILTER_BY_SOURCE.get(source, True)
         total = 0
         passed = 0
         
@@ -266,7 +288,12 @@ def process_and_mix_files(
                     total += 1
                     
                     # Process through pipeline
-                    processed = process_text(text, deduplicator)
+                    processed = process_text(
+                        text,
+                        deduplicator,
+                        language_filter_enabled=lang_enabled,
+                        dedup_enabled=True,
+                    )
                     
                     if processed is not None:
                         cleaned_by_source[source].append(processed)
@@ -288,6 +315,88 @@ def process_and_mix_files(
     
     stats = mix_datasets(cleaned_by_source, output_file)
     
+    return stats
+
+
+def _clean_file_no_dedup(args):
+    """
+    Worker for parallel cleaning without dedup.
+    Args tuple: (source, input_file, temp_output, progress_interval)
+    """
+    source, input_file, temp_output, progress_interval = args
+    lang_enabled = LANGUAGE_FILTER_BY_SOURCE.get(source, True)
+    # Clean with language filter, PII, quality; skip dedup for global dedup later
+    process_jsonl_file(
+        input_file=input_file,
+        output_file=temp_output,
+        reset_dedup=True,
+        progress_interval=progress_interval,
+        language_filter_enabled=lang_enabled,
+        dedup_enabled=False,
+    )
+    return source, temp_output
+
+
+def process_and_mix_files_parallel(
+    input_files_with_sources: List[Tuple[str, str]],
+    output_file: str,
+    progress_interval: int = 10000,
+    processes: Optional[int] = None,
+):
+    """
+    Parallel cleaning (per source) without dedup, then global dedup + mix.
+    Keeps quality: language filter ON for all sources; dedup is applied globally after cleaning.
+    """
+    print(f"\n{'='*60}")
+    print("Parallel cleaning per source (dedup deferred)...")
+    print(f"{'='*60}")
+
+    # Prepare temp outputs
+    base_tmp_dir = Path("tmp")
+    base_tmp_dir.mkdir(exist_ok=True)
+    tasks = []
+    for source, input_file in input_files_with_sources:
+        temp_output = base_tmp_dir / f"cleaned_{source}.jsonl"
+        tasks.append((source, input_file, str(temp_output), progress_interval))
+
+    # Run per-source cleaning in parallel
+    procs = processes or min(len(tasks), mp.cpu_count())
+    with mp.Pool(processes=procs) as pool:
+        results = pool.map(_clean_file_no_dedup, tasks)
+
+    # Global dedup + mix
+    print(f"\n{'='*60}")
+    print("Global deduplication and mixing...")
+    print(f"{'='*60}")
+
+    reset_deduplicator()
+    deduplicator = get_deduplicator()
+    cleaned_by_source = {source: [] for source, _ in input_files_with_sources}
+
+    for source, temp_output in results:
+        total = 0
+        kept = 0
+        with open(temp_output, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    text = data.get("text", "")
+                    if not text:
+                        continue
+                    total += 1
+                    if deduplicator.is_duplicate(text):
+                        continue
+                    cleaned_by_source[source].append(text)
+                    kept += 1
+                except Exception:
+                    continue
+        print(f"  {source}: {kept:,}/{total:,} kept after global dedup")
+
+    # Mix to target ratios
+    stats = mix_datasets(cleaned_by_source, output_file)
     return stats
 
 

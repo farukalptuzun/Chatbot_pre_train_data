@@ -99,3 +99,13 @@ TOTAL_TARGET_EXAMPLES = 10_000_000  # 10M examples
 # Fetch 1.5x target to account for filtering and deduplication losses
 OVERFETCH_FACTOR = 1.5
 
+# Source-specific language filter settings
+# Trusted sources (e.g., Wikipedia) can skip language detection for speed without quality loss.
+LANGUAGE_FILTER_BY_SOURCE = {
+    "mc4_tr": True,
+    "wiki_tr": True,
+    "wiki_en": True,
+    "c4_en": True,
+    "tech_docs": True,
+}
+
