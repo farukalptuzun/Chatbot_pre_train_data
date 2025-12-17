@@ -41,9 +41,13 @@ def main():
     }
     
     # Run full pipeline (will handle loading with limits and ratio-aware mixing)
+    # Set use_parallel=True to enable per-source parallel cleaning with global dedup/mix
     run_full_pipeline(
         data_sources=data_sources,
-        output_file="output/train.jsonl"
+        output_file="output/train.jsonl",
+        use_parallel=True,         # parallel per-source cleaning
+        processes=4,               # adjust to CPU cores / RAM (4–6 recommended)
+        progress_interval=10000,   # lower to 1000 for finer logs
     )
 
 

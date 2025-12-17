@@ -479,7 +479,10 @@ def process_multiple_files(
 
 def run_full_pipeline(
     data_sources: dict,
-    output_file: str = None
+    output_file: str = None,
+    use_parallel: bool = False,
+    processes: Optional[int] = None,
+    progress_interval: int = 10000,
 ):
     """
     Run the full pipeline from data loading to final output with ratio-aware mixing
@@ -572,7 +575,20 @@ def run_full_pipeline(
     print(f"Starting ratio-aware pipeline processing...")
     print(f"{'='*60}\n")
     
-    stats = process_and_mix_files(loaded_files_with_sources, output_file, reset_dedup_between=False)
+    if use_parallel:
+        stats = process_and_mix_files_parallel(
+            loaded_files_with_sources,
+            output_file,
+            progress_interval=progress_interval,
+            processes=processes,
+        )
+    else:
+        stats = process_and_mix_files(
+            loaded_files_with_sources,
+            output_file,
+            reset_dedup_between=False,
+            progress_interval=progress_interval,
+        )
     
     print(f"\n{'='*60}")
     print(f"Pipeline completed!")
