@@ -22,12 +22,21 @@ from deduplication import get_deduplicator, reset_deduplicator
 from pii_filter import pii_filter
 from quality_filter import quality_filter
 
+# Quality module (optional, for advanced risk scoring)
+try:
+    from quality.risk_scoring import compute_risk_score
+    QUALITY_MODULE_AVAILABLE = True
+except ImportError:
+    QUALITY_MODULE_AVAILABLE = False
+    print("Warning: Quality module not available. Advanced risk scoring disabled.")
+
 
 def process_text(
     text: str,
     deduplicator=None,
     language_filter_enabled: bool = True,
     dedup_enabled: bool = True,
+    use_quality_module: Optional[bool] = None,
 ) -> Optional[str]:
     """
     Process a single text through the entire pipeline
@@ -35,6 +44,9 @@ def process_text(
     Args:
         text: Input text
         deduplicator: Deduplicator instance (optional, will create if not provided)
+        language_filter_enabled: Whether to apply language filtering
+        dedup_enabled: Whether to apply deduplication
+        use_quality_module: Whether to use quality module risk scoring (None = use config default)
         
     Returns:
         Processed text if it passes all filters, None otherwise
@@ -61,9 +73,23 @@ def process_text(
     if not pii_filter(cleaned):
         return None
     
-    # Step 5: Quality filter
+    # Step 5: Quality filter (basic)
     if not quality_filter(cleaned):
         return None
+    
+    # Step 6: Quality module risk scoring (advanced)
+    if use_quality_module is None:
+        use_quality_module = config.use_quality_module
+    
+    if use_quality_module and QUALITY_MODULE_AVAILABLE:
+        try:
+            risk_score = compute_risk_score(cleaned)
+            if risk_score >= config.quality_risk_threshold:
+                return None  # Drop high-risk content
+        except Exception as e:
+            # If risk scoring fails, log but don't fail the text
+            print(f"Risk scoring error: {e}")
+            # Continue with text (fail-safe)
     
     return cleaned
 
@@ -75,6 +101,7 @@ def process_jsonl_file(
     progress_interval: int = 10000,
     language_filter_enabled: bool = True,
     dedup_enabled: bool = True,
+    use_quality_module: Optional[bool] = None,
 ):
     """
     Process a JSONL file through the entire pipeline
@@ -119,6 +146,7 @@ def process_jsonl_file(
                     deduplicator,
                     language_filter_enabled=language_filter_enabled,
                     dedup_enabled=dedup_enabled,
+                    use_quality_module=use_quality_module,
                 )
                 
                 if processed is not None:
@@ -173,6 +201,67 @@ def compute_fetch_counts():
         k: int(count * OVERFETCH_FACTOR)
         for k, count in targets.items()
     }
+
+
+def mix_datasets_from_files(deduped_files: dict, output_file: str, targets: dict):
+    """
+    Mix datasets from files (streaming, RAM efficient)
+    
+    Args:
+        deduped_files: Dict of {source_name: file_path}
+        output_file: Output file path
+        targets: Dict of {source_name: target_count}
+        
+    Returns:
+        Dict with statistics about the mixing process
+    """
+    print(f"\n{'='*60}")
+    print(f"Mixing datasets to target ratios...")
+    print(f"{'='*60}")
+    
+    stats = {}
+    total_written = 0
+    
+    # Her source için metinleri oku ve hedef sayıya kadar seç (sadece gerekli olanları RAM'e al)
+    source_texts = {}
+    for source, file_path in deduped_files.items():
+        texts = []
+        print(f"  Loading {source} for mixing...")
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    texts.append(line)
+        
+        target_count = targets.get(source, 0)
+        random.shuffle(texts)
+        keep_n = min(len(texts), target_count)
+        source_texts[source] = texts[:keep_n]
+        
+        stats[source] = {
+            "available": len(texts),
+            "target": target_count,
+            "selected": keep_n,
+            "ratio": keep_n / len(texts) if len(texts) > 0 else 0
+        }
+        print(f"  {source:12s}: {keep_n:>8,}/{target_count:>8,} target ({keep_n/target_count*100:.1f}% of target)")
+    
+    # Final output'a yaz
+    with open(output_file, "w", encoding="utf-8") as out_f:
+        for source, texts in source_texts.items():
+            for text_line in texts:
+                out_f.write(text_line + "\n")
+                total_written += 1
+    
+    # Print final ratio report
+    print(f"\nFinal Mix Ratios:")
+    for source, stat in stats.items():
+        actual_ratio = stat["selected"] / total_written if total_written > 0 else 0
+        target_ratio = DATASET_MIX[source]["target"]
+        print(f"  {source:12s}: {actual_ratio*100:>5.2f}% (target: {target_ratio*100:>5.2f}%)")
+    
+    print(f"\nTotal examples in final dataset: {total_written:,}")
+    return stats
 
 
 def mix_datasets(cleaned_datasets: dict, output_file: str):
@@ -293,6 +382,7 @@ def process_and_mix_files(
                         deduplicator,
                         language_filter_enabled=lang_enabled,
                         dedup_enabled=True,
+                        use_quality_module=config.use_quality_module,
                     )
                     
                     if processed is not None:
@@ -321,9 +411,9 @@ def process_and_mix_files(
 def _clean_file_no_dedup(args):
     """
     Worker for parallel cleaning without dedup.
-    Args tuple: (source, input_file, temp_output, progress_interval)
+    Args tuple: (source, input_file, temp_output, progress_interval, use_quality_module)
     """
-    source, input_file, temp_output, progress_interval = args
+    source, input_file, temp_output, progress_interval, use_quality_module = args
     lang_enabled = LANGUAGE_FILTER_BY_SOURCE.get(source, True)
     # Clean with language filter, PII, quality; skip dedup for global dedup later
     process_jsonl_file(
@@ -333,6 +423,7 @@ def _clean_file_no_dedup(args):
         progress_interval=progress_interval,
         language_filter_enabled=lang_enabled,
         dedup_enabled=False,
+        use_quality_module=use_quality_module,
     )
     return source, temp_output
 
@@ -342,10 +433,18 @@ def process_and_mix_files_parallel(
     output_file: str,
     progress_interval: int = 10000,
     processes: Optional[int] = None,
+    use_quality_module: Optional[bool] = None,
 ):
     """
     Parallel cleaning (per source) without dedup, then global dedup + mix.
     Keeps quality: language filter ON for all sources; dedup is applied globally after cleaning.
+    
+    Args:
+        input_files_with_sources: List of (source, input_file) tuples
+        output_file: Output file path
+        progress_interval: Print progress every N examples
+        processes: Number of parallel processes (None = auto)
+        use_quality_module: Whether to use quality module risk scoring (None = use config default)
     """
     print(f"\n{'='*60}")
     print("Parallel cleaning per source (dedup deferred)...")
@@ -357,27 +456,36 @@ def process_and_mix_files_parallel(
     tasks = []
     for source, input_file in input_files_with_sources:
         temp_output = base_tmp_dir / f"cleaned_{source}.jsonl"
-        tasks.append((source, input_file, str(temp_output), progress_interval))
+        tasks.append((source, input_file, str(temp_output), progress_interval, use_quality_module))
 
     # Run per-source cleaning in parallel
     procs = processes or min(len(tasks), mp.cpu_count())
     with mp.Pool(processes=procs) as pool:
         results = pool.map(_clean_file_no_dedup, tasks)
 
-    # Global dedup + mix
+    # Global dedup + mix (streaming to avoid RAM issues)
     print(f"\n{'='*60}")
     print("Global deduplication and mixing...")
     print(f"{'='*60}")
 
     reset_deduplicator()
     deduplicator = get_deduplicator()
-    cleaned_by_source = {source: [] for source, _ in input_files_with_sources}
-
+    
+    # Her source için dedup sonrası temp dosya (streaming)
+    deduped_by_source = {}
+    targets = compute_target_counts()
+    
+    # İlk pass: Global dedup ve temp dosyalara yazma (RAM efficient)
     for source, temp_output in results:
         total = 0
         kept = 0
-        with open(temp_output, "r", encoding="utf-8") as f:
-            for line in f:
+        deduped_file = base_tmp_dir / f"deduped_{source}.jsonl"
+        deduped_by_source[source] = str(deduped_file)
+        
+        print(f"  Processing {source} for global dedup...")
+        with open(temp_output, "r", encoding="utf-8") as f_in, \
+             open(deduped_file, "w", encoding="utf-8") as f_out:
+            for line in f_in:
                 line = line.strip()
                 if not line:
                     continue
@@ -389,14 +497,19 @@ def process_and_mix_files_parallel(
                     total += 1
                     if deduplicator.is_duplicate(text):
                         continue
-                    cleaned_by_source[source].append(text)
+                    # Direkt dosyaya yaz (RAM'de tutma!)
+                    f_out.write(line + "\n")
                     kept += 1
+                    
+                    if total % 100000 == 0:
+                        print(f"    {source}: {total:,} processed | {kept:,} kept | Rate: {kept/total*100:.1f}%")
+                        
                 except Exception:
                     continue
         print(f"  {source}: {kept:,}/{total:,} kept after global dedup")
 
-    # Mix to target ratios
-    stats = mix_datasets(cleaned_by_source, output_file)
+    # İkinci pass: Mixing için dosyalardan oku (sadece gerekli olanları RAM'e al)
+    stats = mix_datasets_from_files(deduped_by_source, output_file, targets)
     return stats
 
 
@@ -453,7 +566,11 @@ def process_multiple_files(
                         total_all += 1
                         
                         # Process through pipeline
-                        processed = process_text(text, deduplicator)
+                        processed = process_text(
+                            text, 
+                            deduplicator,
+                            use_quality_module=config.use_quality_module,
+                        )
                         
                         if processed is not None:
                             # Write to output

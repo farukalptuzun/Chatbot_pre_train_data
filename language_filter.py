@@ -123,6 +123,54 @@ def detect_language(text: str, model_path: Optional[str] = None) -> Tuple[str, f
     return lang, confidence
 
 
+def has_chinese_characters(text: str) -> bool:
+    """
+    Check if text contains Chinese characters (CJK unified ideographs)
+    
+    Args:
+        text: Input text
+        
+    Returns:
+        True if text contains Chinese characters
+    """
+    # CJK Unified Ideographs range: U+4E00 to U+9FFF
+    # Also includes CJK Extension A: U+3400 to U+4DBF
+    for char in text:
+        code_point = ord(char)
+        if (0x4E00 <= code_point <= 0x9FFF) or (0x3400 <= code_point <= 0x4DBF):
+            return True
+    return False
+
+
+def chinese_character_ratio(text: str) -> float:
+    """
+    Calculate ratio of Chinese characters in text
+    
+    Args:
+        text: Input text
+        
+    Returns:
+        Ratio of Chinese characters (0.0 to 1.0)
+    """
+    if not text:
+        return 0.0
+    
+    chinese_count = 0
+    total_chars = 0
+    
+    for char in text:
+        if char.strip():  # Skip whitespace
+            total_chars += 1
+            code_point = ord(char)
+            if (0x4E00 <= code_point <= 0x9FFF) or (0x3400 <= code_point <= 0x4DBF):
+                chinese_count += 1
+    
+    if total_chars == 0:
+        return 0.0
+    
+    return chinese_count / total_chars
+
+
 def language_filter(text: str, model_path: Optional[str] = None) -> bool:
     """
     Check if text is in one of the allowed languages
@@ -134,6 +182,12 @@ def language_filter(text: str, model_path: Optional[str] = None) -> bool:
     Returns:
         True if text is in allowed language with sufficient confidence
     """
+    # Reject texts with Chinese characters if configured
+    if config.reject_chinese_chars:
+        chinese_ratio = chinese_character_ratio(text)
+        if chinese_ratio > 0.1:  # More than 10% Chinese characters
+            return False
+    
     try:
         lang, prob = detect_language(text, model_path)
         return (lang in config.allowed_languages) and (prob >= config.min_lang_confidence)

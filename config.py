@@ -24,7 +24,7 @@ class Config:
     
     # Deduplication settings
     exact_dedup_enabled: bool = True
-    fuzzy_dedup_enabled: bool = True
+    fuzzy_dedup_enabled: bool = False  # Disabled for speed (~10-50x faster), exact dedup still active
     fuzzy_similarity_threshold: float = 0.9
     minhash_num_perm: int = 128
     
@@ -34,6 +34,11 @@ class Config:
     # Quality filter settings
     min_unique_ratio: float = 0.3
     min_sentence_count: int = 3
+    
+    # Quality module settings (risk scoring)
+    use_quality_module: bool = True  # Enable advanced quality filtering via risk scoring
+    quality_risk_threshold: float = 0.4  # Drop texts with risk score >= this threshold
+    reject_chinese_chars: bool = True  # Reject texts with Chinese characters
     
     # Data mix ratios (for final composition)
     tr_ratio: float = 0.35  # Turkish sources
@@ -103,8 +108,8 @@ OVERFETCH_FACTOR = 1.5
 # Trusted sources (e.g., Wikipedia) can skip language detection for speed without quality loss.
 LANGUAGE_FILTER_BY_SOURCE = {
     "mc4_tr": True,
-    "wiki_tr": True,
-    "wiki_en": True,
+    "wiki_tr": False,  # Wikipedia TR is already Turkish, fasttext check unnecessary
+    "wiki_en": False,  # Wikipedia EN is already English, fasttext check unnecessary
     "c4_en": True,
     "tech_docs": True,
 }
