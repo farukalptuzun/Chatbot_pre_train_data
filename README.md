@@ -1,44 +1,172 @@
-# Pretrain Data Pipeline
+# Kurumsal Chatbot Veri Seti Hazırlama ve Temizleme Pipeline'ı
 
-Modüler pretrain data hazırlama pipeline'ı. Çeşitli kaynaklardan (TR Wiki, OSCAR-TR, EN Wiki, Common Crawl, teknik dokümanlar) temiz ve kaliteli pretrain datası oluşturur.
+Modüler ve ölçeklenebilir bir pretrain veri seti hazırlama pipeline'ı. Çeşitli kaynaklardan toplanan ham verileri, kurumsal chatbot eğitimi için hazır, temiz ve kaliteli veri setlerine dönüştürür.
 
-## Özellikler
+## 📋 İçindekiler
 
-✅ **Format Normalization** - Tüm kaynakları standart `{"text": "..."}` formatına çevirir  
-✅ **Basic Cleaning** - HTML, fazla whitespace, çok kısa/uzun metinleri temizler  
-✅ **Language Filter** - Sadece belirtilen dilleri (TR/EN) tutar (fasttext ile)  
-✅ **Deduplication** - Exact ve fuzzy dedup (MinHash LSH ile %90 benzerlik)  
-✅ **PII Filter** - Kişisel bilgileri (TC, telefon, email, kredi kartı) filtreler  
-✅ **Quality Filter** - Düşük kaliteli metinleri (tekrar, spam) filtreler  
+- [Proje Hakkında](#-proje-hakkında)
+- [Özellikler](#-özellikler)
+- [Kullanılan Teknolojiler](#-kullanılan-teknolojiler)
+- [Pipeline Nasıl Çalışır?](#-pipeline-nasıl-çalışır)
+- [Kurulum](#-kurulum)
+- [Hızlı Başlangıç](#-hızlı-başlangıç)
+- [Modül Yapısı](#-modül-yapısı)
+- [Konfigürasyon](#-konfigürasyon)
+- [Detaylı Kullanım](#-detaylı-kullanım)
 
-## Kurulum
+## 🎯 Proje Hakkında
 
+Bu proje, kurumsal chatbot modellerinin eğitimi için gerekli olan yüksek kaliteli pretrain veri setlerini hazırlamak amacıyla geliştirilmiştir. Pipeline, çeşitli kaynaklardan (Türkçe/İngilizce Wikipedia, OSCAR-TR, Common Crawl, teknik dokümanlar vb.) toplanan ham verileri işleyerek:
+
+- **Standart formata** dönüştürür
+- **Kalite kontrolünden** geçirir
+- **Tekrarları** temizler
+- **Kişisel bilgileri** filtreler
+- **Dil bazlı** filtreleme yapar
+- **Hedef oranlarda** veri karışımı oluşturur
+
+Sonuç olarak, LLM fine-tuning için hazır, temiz ve güvenli bir veri seti üretir.
+
+## ✨ Özellikler
+
+### 🔄 Format Normalizasyonu
+- Tüm farklı kaynak formatlarını standart `{"text": "..."}` JSONL formatına dönüştürür
+- Çoklu veri kaynağı desteği (HuggingFace datasets, JSONL, CSV vb.)
+
+### 🧹 Temel Temizleme
+- HTML/XML etiketlerini kaldırır
+- Fazla whitespace ve özel karakterleri normalize eder
+- Çok kısa/uzun metinleri filtreler
+- Spam ve düşük kaliteli içerikleri tespit eder
+
+### 🌍 Dil Filtreleme
+- FastText dil modeli ile otomatik dil tespiti
+- Sadece belirtilen dilleri (TR/EN) tutar
+- Kaynak bazlı dil filtresi (güvenilir kaynaklar için atlanabilir)
+
+### 🔍 Deduplication (Tekrar Temizleme)
+- **Exact Dedup**: MD5 hash ile birebir aynı metinleri tespit eder
+- **Fuzzy Dedup**: MinHash LSH algoritması ile %90+ benzer metinleri bulur
+- Global ve kaynak bazlı deduplication desteği
+- Büyük veri setleri için optimize edilmiş
+
+### 🔒 PII (Kişisel Bilgi) Filtreleme
+- TC Kimlik Numarası tespiti
+- Telefon numarası filtreleme
+- E-posta adresi tespiti
+- Kredi kartı numarası filtreleme
+- Canary string desteği (ezber kontrolü için)
+
+### 📊 Kalite Kontrolü
+- Tekrar oranı analizi
+- Unique word ratio kontrolü
+- Minimum cümle sayısı kontrolü
+- Gelişmiş risk skorlama (opsiyonel LLM judge ile)
+- Çince karakter filtreleme
+
+### 🔀 Veri Karışımı ve Oran Yönetimi
+- Kaynak bazlı hedef oran belirleme
+- Otomatik veri karışımı
+- Overfetch mekanizması (filtreleme kayıplarını telafi eder)
+- Paralel işleme desteği
+
+## 🛠 Kullanılan Teknolojiler
+
+- **Python 3.8+** - Ana programlama dili
+- **FastText** - Dil tespiti ve filtreleme
+- **DataSketch (MinHash LSH)** - Fuzzy deduplication için
+- **HuggingFace Datasets** - Veri kaynaklarından yükleme
+- **NumPy** - Sayısal işlemler
+- **Multiprocessing** - Paralel işleme desteği
+
+## 🔄 Pipeline Nasıl Çalışır?
+
+Pipeline, verileri aşağıdaki sırayla işler:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Format Normalization                                     │
+│     → Tüm inputlar {"text": "..."} formatına çevrilir       │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  2. Basic Cleaning                                          │
+│     → HTML/XML temizleme, whitespace normalizasyonu         │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  3. Basic Filter                                            │
+│     → Çok kısa/uzun metinler, spam kontrolü                 │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  4. Language Filter                                         │
+│     → FastText ile dil tespiti, sadece TR/EN tutulur        │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  5. Exact Deduplication                                     │
+│     → MD5 hash ile birebir aynı metinler atılır             │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  6. Fuzzy Deduplication (Opsiyonel)                         │
+│     → MinHash LSH ile %90+ benzer metinler atılır           │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  7. PII Filter                                              │
+│     → Kişisel bilgiler içeren metinler atılır               │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  8. Quality Filter                                          │
+│     → Düşük kaliteli metinler atılır                        │
+│     → Risk skorlama (opsiyonel LLM judge)                   │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  9. Dataset Mixing                                          │
+│     → Hedef oranlara göre veri karışımı                     │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  10. Output                                                 │
+│      → train.jsonl dosyasına yazılır                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 📦 Kurulum
+
+### Gereksinimler
+
+- Python 3.8 veya üzeri
+- pip paket yöneticisi
+
+### Adımlar
+
+1. **Repository'yi klonlayın:**
 ```bash
-# Bağımlılıkları yükle
+git clone https://github.com/farukalptuzun/Chatbot_pre_train_data_cleaning.git
+cd Chatbot_pre_train_data_cleaning
+```
+
+2. **Bağımlılıkları yükleyin:**
+```bash
 pip install -r requirements.txt
-
-# Fasttext dil modelini indir (opsiyonel - otomatik indirilebilir)
-# wget https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin
 ```
 
-## Modül Yapısı
-
-```
-├── config.py              # Tüm konfigürasyonlar
-├── data_loaders.py        # Veri kaynaklarından yükleme (Wiki, OSCAR, CC)
-├── format_normalizer.py   # Format normalizasyonu
-├── basic_cleaner.py       # Temel temizlik
-├── language_filter.py     # Dil filtresi
-├── deduplication.py       # Deduplication (exact + fuzzy)
-├── pii_filter.py          # PII filtreleme
-├── quality_filter.py      # Kalite filtresi
-├── pipeline.py            # Ana pipeline
-└── example_usage.py       # Kullanım örnekleri
+3. **FastText dil modelini indirin (opsiyonel - otomatik indirilebilir):**
+```bash
+# Manuel indirme (opsiyonel)
+wget https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin
 ```
 
-## Hızlı Başlangıç
+## 🚀 Hızlı Başlangıç
 
-### Örnek 1: Tek dosya işleme
+### Örnek 1: Tek Dosya İşleme
+
+En basit kullanım senaryosu:
 
 ```python
 from pipeline import process_jsonl_file
@@ -49,7 +177,9 @@ process_jsonl_file(
 )
 ```
 
-### Örnek 2: HuggingFace datasetlerinden yükleme ve işleme
+### Örnek 2: Çoklu Veri Kaynağı ile Tam Pipeline
+
+HuggingFace datasetlerinden veri yükleyip işleme:
 
 ```python
 from data_loaders import load_oscar_tr, load_wikipedia_tr
@@ -61,17 +191,18 @@ wiki_file = load_wikipedia_tr("raw_data/wiki_tr_raw.jsonl")
 
 # Pipeline'dan geçir
 data_sources = {
-    "oscar_tr": oscar_file,
+    "mc4_tr": oscar_file,
     "wiki_tr": wiki_file,
 }
 
 run_full_pipeline(
     data_sources=data_sources,
-    output_file="output/train.jsonl"
+    output_file="output/train.jsonl",
+    use_parallel=True  # Paralel işleme
 )
 ```
 
-### Örnek 3: Birden fazla dosyayı birleştirme
+### Örnek 3: Birden Fazla Dosyayı Birleştirme
 
 ```python
 from pipeline import process_multiple_files
@@ -87,55 +218,138 @@ process_multiple_files(
 )
 ```
 
-## Konfigürasyon
+## 📁 Modül Yapısı
 
-`config.py` dosyasından tüm parametreleri özelleştirebilirsiniz:
+```
+Chatbot_pre_train_data_cleaning/
+├── config.py                  # Tüm konfigürasyonlar ve ayarlar
+├── data_loaders.py            # Veri kaynaklarından yükleme (Wiki, OSCAR, CC)
+├── format_normalizer.py       # Format normalizasyonu
+├── basic_cleaner.py           # Temel temizlik işlemleri
+├── language_filter.py         # Dil filtresi (FastText)
+├── deduplication.py           # Deduplication (exact + fuzzy)
+├── pii_filter.py              # PII filtreleme
+├── quality_filter.py          # Kalite filtresi
+├── pipeline.py                # Ana pipeline koordinatörü
+├── example_usage.py           # Kullanım örnekleri
+├── quality/                   # Gelişmiş kalite kontrol modülleri
+│   ├── quality_pipeline.py    # Kalite pipeline'ı
+│   ├── risk_scoring.py        # Risk skorlama
+│   ├── llm_judge.py           # LLM tabanlı kalite değerlendirme
+│   ├── rules.py               # Kalite kuralları
+│   └── thresholds.py          # Eşik değerleri
+├── output/                    # İşlenmiş veri çıktıları
+│   └── train_cleaned.jsonl
+└── requirements.txt           # Python bağımlılıkları
+```
+
+## ⚙️ Konfigürasyon
+
+Tüm parametreler `config.py` dosyasından özelleştirilebilir:
+
+### Temel Filtreler
 
 ```python
 from config import config
 
-# Temel filtreler
+# Metin uzunluk sınırları
 config.min_text_length = 200        # Minimum karakter sayısı
 config.max_text_length = 50000      # Maximum karakter sayısı
-
-# Dil filtresi
-config.allowed_languages = ["tr", "en"]
-config.min_lang_confidence = 0.7
-
-# Deduplication
-config.fuzzy_similarity_threshold = 0.9  # %90 benzer metinleri at
-
-# Kalite filtresi
-config.min_unique_ratio = 0.3       # Minimum unique word ratio
-config.min_sentence_count = 3       # Minimum cümle sayısı
+config.max_http_count = 3           # Maximum HTTP link sayısı
 ```
 
-## Pipeline Adımları
+### Dil Filtresi
 
-Pipeline şu sırayla çalışır:
+```python
+# İzin verilen diller
+config.allowed_languages = ["tr", "en"]
 
-1. **Format Normalization** → Tüm inputlar `{"text": "..."}` formatına çevrilir
-2. **Basic Cleaning** → HTML temizleme, whitespace normalizasyonu
-3. **Basic Filter** → Çok kısa/uzun metinler, spam kontrolü
-4. **Language Filter** → Sadece belirtilen diller tutulur
-5. **Exact Dedup** → MD5 hash ile birebir aynı metinler atılır
-6. **Fuzzy Dedup** → MinHash LSH ile benzer metinler atılır (%90+ benzerlik)
-7. **PII Filter** → Kişisel bilgiler içeren metinler atılır
-8. **Quality Filter** → Düşük kaliteli metinler atılır
-9. **Output** → `train.jsonl` dosyasına yazılır
+# Minimum dil tespit güveni
+config.min_lang_confidence = 0.7
+```
 
-## Veri Kaynağı Önerileri
+### Deduplication
 
-Önerilen pretrain mix oranları:
+```python
+# Exact deduplication (varsayılan: açık)
+config.exact_dedup_enabled = True
 
-- **%35 TR** - Wiki-TR + OSCAR-TR
-- **%35 EN** - Wiki-EN + Common Crawl (filtered)
-- **%20 Teknik Dokümanlar** - API docs, technical documentation
-- **%10 High-Quality Curated** - Manuel seçilmiş yüksek kaliteli metinler
+# Fuzzy deduplication (varsayılan: kapalı - performans için)
+config.fuzzy_dedup_enabled = False
+config.fuzzy_similarity_threshold = 0.9  # %90 benzer metinleri at
+```
 
-## PII ve Canary Test
+### Kalite Filtresi
 
-Pipeline, eğitim datasına canary string (`ZXQJ_CANARY_492837`) eklenmesini destekler. Eğitim sonrası modele bu string sorulduğunda, eğer model biliyorsa PII/ezber problemi var demektir.
+```python
+# Minimum unique word ratio
+config.min_unique_ratio = 0.3
+
+# Minimum cümle sayısı
+config.min_sentence_count = 3
+
+# Gelişmiş risk skorlama (opsiyonel)
+config.use_quality_module = True
+config.quality_risk_threshold = 0.4
+```
+
+### Veri Karışım Oranları
+
+```python
+from config import DATASET_MIX, TOTAL_TARGET_EXAMPLES
+
+# Hedef veri seti boyutu
+TOTAL_TARGET_EXAMPLES = 10_000_000  # 10M örnek
+
+# Kaynak bazlı hedef oranlar
+DATASET_MIX = {
+    "mc4_tr": {"target": 0.30},      # %30
+    "wiki_tr": {"target": 0.125},    # %12.5
+    "wiki_en": {"target": 0.225},    # %22.5
+    "tech_docs": {"target": 0.175},  # %17.5
+    "c4_en": {"target": 0.075},      # %7.5
+}
+```
+
+## 📖 Detaylı Kullanım
+
+### Paralel İşleme
+
+Büyük veri setleri için paralel işleme kullanabilirsiniz:
+
+```python
+from pipeline import process_and_mix_files_parallel
+
+stats = process_and_mix_files_parallel(
+    input_files_with_sources=[
+        ("mc4_tr", "raw_data/mc4_tr.jsonl"),
+        ("wiki_tr", "raw_data/wiki_tr.jsonl"),
+        ("wiki_en", "raw_data/wiki_en.jsonl"),
+    ],
+    output_file="output/train.jsonl",
+    processes=4  # Paralel process sayısı
+)
+```
+
+### Gelişmiş Kalite Kontrolü
+
+LLM tabanlı kalite değerlendirme kullanımı:
+
+```python
+from quality.quality_pipeline import quality_pass
+
+# İlk pipeline'dan geçmiş veriyi kalite kontrolünden geçir
+quality_pass(
+    input_file="output/cleaned.jsonl",
+    output_file="output/final.jsonl",
+    dropped_file="output/dropped.jsonl",
+    progress_interval=1000
+)
+```
+
+### PII ve Canary Test
+
+Pipeline, eğitim datasına canary string eklenmesini destekler. Eğitim sonrası modele bu string sorulduğunda, eğer model biliyorsa PII/ezber problemi var demektir:
 
 ```python
 from pii_filter import CANARY_STRING, add_canary_to_text
@@ -144,12 +358,30 @@ from pii_filter import CANARY_STRING, add_canary_to_text
 text_with_canary = add_canary_to_text(processed_text)
 ```
 
-## Notlar
+## 📊 Veri Kaynağı Önerileri
+
+Önerilen pretrain veri karışım oranları:
+
+- **%35 Türkçe** - Wiki-TR + OSCAR-TR (MC4-TR)
+- **%35 İngilizce** - Wiki-EN + Common Crawl (filtered)
+- **%20 Teknik Dokümanlar** - API docs, technical documentation
+- **%10 High-Quality Curated** - Manuel seçilmiş yüksek kaliteli metinler
+
+## ⚠️ Notlar ve Sınırlamalar
 
 - Büyük datasetler için fuzzy dedup shard'lanarak yapılabilir (şu an tüm dataset için tek LSH)
 - Language model (`lid.176.bin`) ilk kullanımda otomatik indirilmeye çalışılır
 - Memory kullanımı için büyük dosyaları parçalara bölerek işleyebilirsiniz
+- Fuzzy deduplication varsayılan olarak kapalıdır (performans için)
 
-## Lisans
+## 📄 Lisans
 
 Bu proje eğitim ve araştırma amaçlı kullanılabilir.
+
+## 🤝 Katkıda Bulunma
+
+Katkılarınızı bekliyoruz! Lütfen pull request göndermeden önce mevcut kod yapısına uygun olduğundan emin olun.
+
+---
+
+**Geliştirici:** [Faruk Alp Tuzun](https://github.com/farukalptuzun)
