@@ -61,20 +61,79 @@ def _detect_ecommerce_spam(text: str) -> float:
     if any(keyword in t for keyword in ["boyut grafiği", "size chart", "cm/inç", "cm/inch"]):
         score += 0.3
     
-    # Price patterns (multiple prices suggest product listing)
-    price_pattern = r'\d+[.,]\d+\s*(tl|₺|usd|\$|eur|€)'
-    price_count = len(re.findall(price_pattern, t, re.IGNORECASE))
-    if price_count >= 3:
+    # Enhanced price pattern detection
+    # Multiple price formats: ₺, TL, $, €, USD, EUR
+    price_patterns = [
+        r'\d+[.,]\d+\s*(tl|₺)',  # Turkish Lira
+        r'\d+[.,]\d+\s*(usd|\$)',  # US Dollar
+        r'\d+[.,]\d+\s*(eur|€)',  # Euro
+        r'₺\s*\d+[.,]?\d*',  # Alternative TL format
+        r'\$\s*\d+[.,]?\d*',  # Alternative $ format
+        r'€\s*\d+[.,]?\d*',  # Alternative € format
+        r'\d+\s*(tl|₺)',  # Integer prices
+    ]
+    
+    total_price_count = 0
+    for pattern in price_patterns:
+        total_price_count += len(re.findall(pattern, t, re.IGNORECASE))
+    
+    # Multiple prices strongly suggest product listing
+    if total_price_count >= 3:
+        score += 0.4  # Increased from 0.3
+    elif total_price_count >= 2:
+        score += 0.25  # Increased from 0.15
+    
+    # Currency symbol frequency (too many currency symbols = product listing)
+    currency_symbols = t.count('₺') + t.count('$') + t.count('€') + t.count('tl')
+    if currency_symbols >= 4:
         score += 0.3
-    elif price_count >= 2:
+    elif currency_symbols >= 2:
         score += 0.15
+    
+    # Product specification patterns (technical specs)
+    spec_patterns = [
+        r'\d+\s*(cm|inch|inç|mm|kg|g|mb|gb|tb)',  # Dimensions and weights
+        r'\d+x\d+',  # Dimensions like "10x20"
+        r'[a-z]+\s*\d+',  # Model numbers like "model 123", "samsung 5"
+        r'\d+\.\d+\s*(ghz|mhz|rpm)',  # Technical specs
+    ]
+    
+    spec_match_count = sum(1 for pattern in spec_patterns if re.search(pattern, t))
+    if spec_match_count >= 3:
+        score += 0.3
+    elif spec_match_count >= 2:
+        score += 0.15
+    
+    # Product attribute lists
+    attribute_keywords = [
+        "renk:", "color:", "boyut:", "size:", "beden:", "fabric:",
+        "malzeme:", "material:", "marka:", "brand:", "model:",
+        "özellik:", "feature:", "spesifikasyon:", "specification:"
+    ]
+    
+    attribute_count = sum(1 for keyword in attribute_keywords if keyword in t)
+    if attribute_count >= 4:
+        score += 0.3
+    elif attribute_count >= 2:
+        score += 0.15
+    
+    # Stock availability patterns
+    stock_patterns = ["stokta", "in stock", "stokta yok", "out of stock", "tükendi", "sold out"]
+    if any(pattern in t for pattern in stock_patterns):
+        score += 0.2
     
     # Shipping/delivery info (common in e-commerce spam)
     if any(keyword in t for keyword in ["kargo", "shipping", "teslimat", "delivery"]):
         if "ücretsiz" in t or "free" in t:
             score += 0.2
     
-    return min(score, 0.5)  # Cap e-commerce score at 0.5
+    # Shopping cart / checkout patterns
+    cart_keywords = ["sepete ekle", "add to cart", "sepet", "cart", "checkout", "ödeme", "payment"]
+    cart_count = sum(1 for keyword in cart_keywords if keyword in t)
+    if cart_count >= 2:
+        score += 0.3
+    
+    return min(score, 0.7)  # Increased cap from 0.5 to 0.7 for stricter detection
 
 
 def _detect_seo_spam(text: str) -> float:
@@ -116,11 +175,11 @@ def _detect_mixed_language(text: str) -> float:
     """Detect mixed language issues (non-TR/EN characters)"""
     score = 0.0
     
-    # Chinese character ratio
+    # Chinese character ratio (stricter thresholds)
     chinese_ratio = _chinese_character_ratio(text)
     if chinese_ratio > 0.1:  # More than 10% Chinese characters
         score += 0.5
-    elif chinese_ratio > 0.05:  # More than 5% Chinese characters
+    elif chinese_ratio > 0.01:  # More than 1% Chinese characters (stricter: was 0.05)
         score += 0.3
     
     # Check for other non-Latin scripts (Arabic, Cyrillic, etc.)
@@ -333,13 +392,16 @@ def compute_risk_score(text: str) -> float:
         if uniq_ratio < 0.4:
             score += 0.3
 
-    # Chinese character detection
+    # Chinese character detection (strict: any Chinese character = high risk)
     if _has_chinese_characters(text):
+        # Any Chinese character is unacceptable for TR/EN dataset
+        score += 0.8  # Very high risk - direct drop recommended
+        # Also check ratio for additional penalty
         chinese_ratio = _chinese_character_ratio(text)
         if chinese_ratio > 0.1:
-            score += 0.5  # High Chinese content
-        elif chinese_ratio > 0.05:
-            score += 0.3  # Moderate Chinese content
+            score += 0.2  # Additional penalty for high Chinese content
+        elif chinese_ratio > 0.01:  # Stricter threshold (was 0.05)
+            score += 0.1  # Additional penalty for any significant Chinese content
     
     # Mixed language detection
     mixed_lang_score = _detect_mixed_language(text)

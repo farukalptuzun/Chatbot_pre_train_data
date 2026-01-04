@@ -13,9 +13,9 @@ class Config:
     train_output_file: str = "train.jsonl"
     
     # Basic cleaning thresholds
-    min_text_length: int = 200
-    max_text_length: int = 50000
-    max_http_count: int = 3
+    min_text_length: int = 400  # Increased for longer, more meaningful texts
+    max_text_length: int = 30000  # Reduced to filter very long texts
+    max_http_count: int = 1  # Reduced to filter spam links
     
     # Language filter settings
     lang_model_path: str = "lid.176.bin"  # fasttext language model
@@ -32,12 +32,12 @@ class Config:
     pii_patterns: List[str] = None
     
     # Quality filter settings
-    min_unique_ratio: float = 0.3
-    min_sentence_count: int = 3
+    min_unique_ratio: float = 0.45  # Increased for more diverse content
+    min_sentence_count: int = 5  # Increased for more structured texts
     
     # Quality module settings (risk scoring)
     use_quality_module: bool = True  # Enable advanced quality filtering via risk scoring
-    quality_risk_threshold: float = 0.4  # Drop texts with risk score >= this threshold
+    quality_risk_threshold: float = 0.25  # Reduced for more aggressive filtering
     reject_chinese_chars: bool = True  # Reject texts with Chinese characters
     
     # Data mix ratios (for final composition)
@@ -98,11 +98,11 @@ DATASET_MIX = {
 }
 
 # Total target examples (adjustable)
-TOTAL_TARGET_EXAMPLES = 10_000_000  # 10M examples
+TOTAL_TARGET_EXAMPLES = 2_500_000  # 2.5M examples (reduced for smaller, higher quality dataset)
 
 # Overfetch factor (to compensate for dedup/filter losses)
-# Fetch 1.5x target to account for filtering and deduplication losses
-OVERFETCH_FACTOR = 1.5
+# Fetch 2.0x target to account for aggressive filtering and deduplication losses
+OVERFETCH_FACTOR = 2.0
 
 # Source-specific language filter settings
 # Trusted sources (e.g., Wikipedia) can skip language detection for speed without quality loss.
