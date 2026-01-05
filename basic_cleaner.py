@@ -7,6 +7,7 @@ from typing import Optional
 from config import config
 
 
+
 def detect_code_content(text: str) -> bool:
     """
     Detect if text contains HTML/JavaScript code or programming-like content
