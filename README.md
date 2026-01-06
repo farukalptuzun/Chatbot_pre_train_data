@@ -463,4 +463,4 @@ Katkılarınızı bekliyoruz! Lütfen pull request göndermeden önce mevcut kod
 
 ---
 
-**Geliştirici:** [Faruk Alp Tuzun](https://github.com/farukalptuzun)
+**Geliştirici:** [Faruk Alptüzün](https://github.com/farukalptuzun)
